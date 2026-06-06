@@ -60,7 +60,18 @@ class BaseDataset(Dataset):
                 next = functional.rotate(next, angle)
                 self.gt = functional.rotate(self.gt, angle)
         return pre, next
-        
+
+
+class RealDataset(BaseDataset):
+    def data_process(self, pre, next):
+        compose = transforms.Compose([
+            transforms.Normalize(mean=self.mean, std=self.std),
+        ])
+        pre, next = self.augment(pre, next)
+        pre = compose(pre)
+        next = compose(next)
+        data = torch.cat((pre, next))
+        return data
 
 
 class ComplexDataset(BaseDataset):
@@ -75,24 +86,7 @@ class ComplexDataset(BaseDataset):
         return data
 
 
-class RealDataset(BaseDataset):
-    def data_process(self, pre, next):
-        compose = transforms.Compose([
-            transforms.Normalize(mean=self.mean, std=self.std),
-        ])
-        pre, next = self.augment(pre, next)
-        pre = compose(pre)
-        next =  compose(next)
-        data = torch.cat((pre, next))
-        return data
-
-    
 class APDataset(BaseDataset):
-    '''
-    Amplitude and phase Dataset
-
-    $$T_{11},T_{22},T_{33},T_{12A},T_{12\theta},T_{13A},T_{13\theta},T_{23A},T_{23\theta}$$
-    '''
     def __init__(self, data_path, mean=None, std=None, is_augment=False, is_db=False) -> None:
         super().__init__(data_path, mean, std, is_augment)
         self.is_db = is_db
@@ -108,14 +102,9 @@ class APDataset(BaseDataset):
         next = compose(next)
         data = torch.cat((pre, next))
         return data
-    
+
 
 class APDatasetC2(BaseDataset):
-    '''
-    Amplitude and phase Dataset
-
-    $$T_{11},T_{22},T_{33},T_{12A},T_{12\theta},T_{13A},T_{13\theta},T_{23A},T_{23\theta}$$
-    '''
     def __init__(self, data_path, mean=None, std=None, is_augment=False, is_db=False) -> None:
         super().__init__(data_path, mean, std, is_augment)
         self.is_db = is_db
@@ -134,22 +123,129 @@ class APDatasetC2(BaseDataset):
         data = torch.cat((pre, next))
         return data
 
-def get_dataset(data_path, mode: str, data_type: str, mean=None, std=None) -> BaseDataset:
+
+class DualStreamBaseDataset(BaseDataset):
+    """Dual-stream dataset returning pre and next as separate tensors.
+
+    Instead of concatenating bi-temporal inputs along the channel dimension,
+    this dataset returns them as a tuple ``(pre, next)`` in the ``'data'``
+    field, suitable for Siamese-style networks with two independent encoders.
+    """
+
+    def __getitem__(self, index) -> dict:
+        pre_path = self.pre_imgs[index]
+        next_path = self.next_imgs[index]
+        gt_path = self.gt_imgs[index]
+        name = Path(pre_path).stem
+        pre = np.load(pre_path)
+        next = np.load(next_path)
+        gt = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
+        self.gt = functional.to_tensor(gt)
+        pre_out, next_out = self.data_process(pre, next)
+        return {'pre': pre_out, 'next': next_out, 'gt': self.gt, 'name': name}
+
+    def data_process(self, pre, next):
+        raise NotImplementedError
+
+
+class DualStreamRealDataset(DualStreamBaseDataset):
+    def data_process(self, pre, next):
+        compose = transforms.Compose([
+            transforms.Normalize(mean=self.mean, std=self.std),
+        ])
+        pre, next = self.augment(pre, next)
+        return compose(pre), compose(next)
+
+
+class DualStreamComplexDataset(DualStreamBaseDataset):
+    def data_process(self, pre, next):
+        compose = transforms.Compose([
+            transforms.Normalize(mean=self.mean, std=self.std),
+        ])
+        pre, next = self.augment(pre, next)
+        return sequence_to_complex(compose(pre)), sequence_to_complex(compose(next))
+
+
+class DualStreamAPDataset(DualStreamBaseDataset):
+    def __init__(self, data_path, mean=None, std=None, is_augment=False, is_db=False) -> None:
+        super().__init__(data_path, mean, std, is_augment)
+        self.is_db = is_db
+
+    def data_process(self, pre, next):
+        compose = transforms.Compose([
+            transforms.Normalize(mean=self.mean, std=self.std),
+        ])
+        pre = sequence_to_vector(pre, self.is_db)
+        next = sequence_to_vector(next, self.is_db)
+        pre, next = self.augment(pre, next)
+        return compose(pre), compose(next)
+
+
+class DualStreamAPDatasetC2(DualStreamBaseDataset):
+    def __init__(self, data_path, mean=None, std=None, is_augment=False, is_db=False) -> None:
+        super().__init__(data_path, mean, std, is_augment)
+        self.is_db = is_db
+
+    def data_process(self, pre, next):
+        compose = transforms.Compose([
+            transforms.Normalize(mean=self.mean, std=self.std),
+        ])
+        pre = sequence_to_vector(pre, self.is_db)
+        next = sequence_to_vector(next, self.is_db)
+        pre, next = self.augment(pre, next)
+        return c3toc2(compose(pre)), c3toc2(compose(next))
+
+
+def get_dataset(data_path, mode: str, data_type: str, mean=None, std=None, dual_stream=False) -> Dataset:
+    """Create a dataset for WHU-PolSAR-CD.
+
+    Args:
+        data_path: Root directory containing {train,valid,test}/{pre,next,gt}/
+            or {pre,next,gt}/ for unsplit data.
+        mode: One of 'train', 'valid', or 'test'.
+        data_type: Input representation - 'real', 'complex', 'ap', 'ap_db',
+            or 'ap_c2_db'.
+        mean: Channel-wise mean for normalization (9-element array).
+        std: Channel-wise std for normalization (9-element array).
+        dual_stream: If True, return pre and next as separate tensors
+            (for Siamese networks) instead of concatenating them.
+
+    Returns:
+        A PyTorch Dataset instance.
+    """
     if isinstance(data_path, str):
         data_path = Path(data_path)
-    data_path = data_path.joinpath(mode)
-    data_type = data_type.lower()
+    split_path = data_path / mode
+    if split_path.is_dir():
+        data_path = split_path
     is_augment = mode == 'train'
-    match data_type:
-        case 'complex':
-            return ComplexDataset(data_path, mean, std, is_augment)
-        case 'real':
-            return RealDataset(data_path, mean, std, is_augment)
-        case 'ap':
-            return APDataset(data_path, mean, std, is_augment)
-        case 'ap_db':
-            return APDataset(data_path, mean, std, is_augment, is_db=True)
-        case 'ap_c2_db':
-            return APDatasetC2(data_path, mean, std, is_augment, is_db=True)
-        case _:
-            return BaseDataset(data_path, mean, std, is_augment)
+    data_type = data_type.lower()
+
+    if dual_stream:
+        match data_type:
+            case 'complex':
+                return DualStreamComplexDataset(data_path, mean, std, is_augment)
+            case 'real':
+                return DualStreamRealDataset(data_path, mean, std, is_augment)
+            case 'ap':
+                return DualStreamAPDataset(data_path, mean, std, is_augment)
+            case 'ap_db':
+                return DualStreamAPDataset(data_path, mean, std, is_augment, is_db=True)
+            case 'ap_c2_db':
+                return DualStreamAPDatasetC2(data_path, mean, std, is_augment, is_db=True)
+            case _:
+                return DualStreamBaseDataset(data_path, mean, std, is_augment)
+    else:
+        match data_type:
+            case 'complex':
+                return ComplexDataset(data_path, mean, std, is_augment)
+            case 'real':
+                return RealDataset(data_path, mean, std, is_augment)
+            case 'ap':
+                return APDataset(data_path, mean, std, is_augment)
+            case 'ap_db':
+                return APDataset(data_path, mean, std, is_augment, is_db=True)
+            case 'ap_c2_db':
+                return APDatasetC2(data_path, mean, std, is_augment, is_db=True)
+            case _:
+                return BaseDataset(data_path, mean, std, is_augment)

@@ -370,6 +370,12 @@ Under the following terms:
 - **Dataset & Code Issues**: [GitHub Issues](https://github.com/er134/WHU-PolSAR-CD/issues)
 - **Scientific Inquiries**: `shenbo94@whu.edu.cn`
 
+## 🏛️ Research Group
+
+<a href="https://www.whuspring.cn/"><img src="https://www.whuspring.cn/logo/%E5%9B%BE%E7%89%871_1271834d.webp" width="200" alt="SPRING Lab"></a>
+
+**[SPRING Lab](https://www.whuspring.cn/)** — SAR Product Refinement and INtelligent interpretation Group (SPRING) at Wuhan University. We combine microwave remote sensing scattering mechanisms with artificial intelligence for qualitative and quantitative geophysical information extraction from SAR data.
+
 ---
 
 > **Funding**: This work was supported by the National Natural Science Foundation of China under Grant 62471337 and Grant 42201416.
